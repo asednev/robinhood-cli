@@ -34,8 +34,17 @@ type BrokeragePassiveStatus struct {
 type AuthManager struct {
 	Profile     string
 	SessionPath string
-	Store       CredentialStore
+	Store       credentialStore
 	Client      *HTTPClient
+}
+
+// credentialStore keeps credential operations scoped to an auth manager.
+type credentialStore interface {
+	brokerageCredentials(string) (string, string, error)
+	saveBrokerageCredentials(string, string, string) error
+	deleteBrokerageCredentials(string)
+	cryptoCredentials(string) (string, string, error)
+	deleteCryptoCredentials(string)
 }
 
 type brokerageAuthOptions struct {

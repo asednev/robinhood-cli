@@ -15,6 +15,8 @@ func TestQuoteListCryptoErrorDoesNotPanic(t *testing.T) {
 	t.Setenv("RH_CRYPTO_PRIVATE_KEY_B64", "")
 	cfg := testRuntimeConfig(t)
 	auth := newAuthManager(cfg)
+	auth.Store = &recordingCredentialStore{}
+	auth.Client.client.Transport = loopbackTransport{base: http.DefaultTransport}
 	safety, err := newSafetyEngine(cfg.Paths.StatePath, &cfg.App.Safety)
 	if err != nil {
 		t.Fatalf("newSafetyEngine returned error: %v", err)
@@ -67,6 +69,8 @@ func TestCryptoMarketQuantitySafetyUsesQuote(t *testing.T) {
 	maxOrder := 100.0
 	cfg.App.Safety.MaxOrderNotional = &maxOrder
 	auth := newAuthManager(cfg)
+	auth.Store = &recordingCredentialStore{}
+	auth.Client.client.Transport = loopbackTransport{target: server.Listener.Addr().String(), base: server.Client().Transport}
 	crypto := newOfficialCryptoProvider(auth)
 	crypto.base = server.URL
 	safety, err := newSafetyEngine(cfg.Paths.StatePath, &cfg.App.Safety)
