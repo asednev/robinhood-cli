@@ -44,10 +44,25 @@ func saveSession(path string, session Session) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	file, err := os.CreateTemp(filepath.Dir(path), ".rhx-session-*")
+	if err != nil {
 		return err
 	}
-	return secureFile(path)
+	defer os.Remove(file.Name())
+	if err = file.Chmod(0o600); err == nil {
+		_, err = file.Write(append(data, '\n'))
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(file.Name(), path)
 }
 
 func deleteSession(path string) {

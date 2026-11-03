@@ -252,7 +252,7 @@ func sessionFromTokenPayload(payload map[string]any, status int, deviceToken str
 	if hasMFAChallenge(payload) {
 		return Session{}, newError(ErrorMFARequired, challengeDetail(payload))
 	}
-	if status >= 400 {
+	if status < 200 || status >= 300 {
 		return Session{}, newError(ErrorAuthRequired, challengeDetail(payload))
 	}
 	accessToken, _ := payload["access_token"].(string)
