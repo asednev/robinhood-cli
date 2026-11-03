@@ -23,6 +23,10 @@ func (t loopbackTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // Guard the whole test process, including child test processes, against an
 // accidental native credential invocation. The guard records no arguments.
 func TestMain(m *testing.M) {
+	if nativeCredentialHelper() {
+		os.Exit(m.Run())
+	}
+	captureNativeTestPath()
 	dir, err := os.MkdirTemp("", "rhx-test-tools-")
 	if err != nil {
 		panic(err)
