@@ -34,8 +34,17 @@ type BrokeragePassiveStatus struct {
 type AuthManager struct {
 	Profile     string
 	SessionPath string
-	Store       CredentialStore
+	Store       credentialStore
 	Client      *HTTPClient
+}
+
+// credentialStore keeps credential operations scoped to an auth manager.
+type credentialStore interface {
+	brokerageCredentials(string) (string, string, error)
+	saveBrokerageCredentials(string, string, string) error
+	deleteBrokerageCredentials(string)
+	cryptoCredentials(string) (string, string, error)
+	deleteCryptoCredentials(string)
 }
 
 type brokerageAuthOptions struct {
@@ -252,7 +261,7 @@ func sessionFromTokenPayload(payload map[string]any, status int, deviceToken str
 	if hasMFAChallenge(payload) {
 		return Session{}, newError(ErrorMFARequired, challengeDetail(payload))
 	}
-	if status >= 400 {
+	if status < 200 || status >= 300 {
 		return Session{}, newError(ErrorAuthRequired, challengeDetail(payload))
 	}
 	accessToken, _ := payload["access_token"].(string)

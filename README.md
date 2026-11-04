@@ -8,7 +8,7 @@ Go-native Robinhood CLI for agent workflows.
 - Calls Robinhood's web news feed endpoint for stock news.
 - Calls Robinhood's official crypto trading API directly when crypto API credentials are configured.
 - Keeps `npx rhx` as the primary entrypoint through prebuilt Go binaries.
-- Stores brokerage credentials in the OS keyring when available, with `RH_USERNAME`/`RH_PASSWORD` env vars as a non-persistent fallback.
+- Supports [profile-scoped brokerage authentication](#authentication).
 - Stores brokerage sessions as owner-only JSON files under `~/.config/robinhood-cli/sessions`.
 - Uses global live mode plus short-lived confirmation tokens before order placement.
 - Emits deterministic JSON envelopes with `--json` for automation.
@@ -45,6 +45,8 @@ import (
 client, err := rhx.NewClient("default", "")
 positions, err := client.Positions(context.Background())
 ```
+
+For the experimental Portfolio Pilot reader, see [Portfolio reader](PORTFOLIO_READER.md) for its API and qualification requirements.
 
 ## Authentication
 
@@ -85,7 +87,9 @@ Credentials:
 
 - macOS: Keychain via `security`
 - Linux: Secret Service via `secret-tool`
-- fallback: `RH_USERNAME` and `RH_PASSWORD`
+- environment overrides: `RH_USERNAME` and `RH_PASSWORD`
+
+After a successful password login, the CLI attempts to save the supplied credentials to the OS keyring, including values supplied through environment variables.
 
 Official crypto API credentials:
 

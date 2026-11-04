@@ -3,6 +3,7 @@ package rhx
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -277,7 +278,7 @@ func testBrokerageProviderWithHandler(t *testing.T, handler http.HandlerFunc) (*
 	auth := &AuthManager{
 		Profile:     "test",
 		SessionPath: sessionPath,
-		Store:       CredentialStore{},
+		Store:       &recordingCredentialStore{},
 		Client:      client,
 	}
 	return newBrokerageProvider(auth), server.Close
@@ -289,6 +290,9 @@ type rewriteTransport struct {
 }
 
 func (t rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Scheme != "https" || (req.URL.Host != "api.robinhood.com" && req.URL.Host != "nummus.robinhood.com" && req.URL.Host != "dora.robinhood.com" && req.URL.Host != "trading.robinhood.com") || t.target.Scheme != "http" || t.target.Hostname() != "127.0.0.1" {
+		return nil, fmt.Errorf("unexpected test destination: %s", req.URL.Redacted())
+	}
 	clone := req.Clone(req.Context())
 	clone.URL.Scheme = t.target.Scheme
 	clone.URL.Host = t.target.Host

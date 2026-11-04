@@ -17,6 +17,7 @@ func TestPostFormRawKeepsVerificationWorkflowBody(t *testing.T) {
 	defer server.Close()
 
 	client := newHTTPClient(nil)
+	client.client.Transport = loopbackTransport{target: server.Listener.Addr().String(), base: server.Client().Transport}
 	data, status, err := client.postFormRaw(context.Background(), server.URL, url.Values{"username": []string{"user"}})
 	if err != nil {
 		t.Fatalf("postFormRaw returned error: %v", err)
@@ -38,6 +39,7 @@ func TestPostFormMapsForbiddenWithoutRaw(t *testing.T) {
 	defer server.Close()
 
 	client := newHTTPClient(nil)
+	client.client.Transport = loopbackTransport{target: server.Listener.Addr().String(), base: server.Client().Transport}
 	_, _, err := client.postForm(context.Background(), server.URL, url.Values{"username": []string{"user"}})
 	if err == nil {
 		t.Fatalf("postForm succeeded")

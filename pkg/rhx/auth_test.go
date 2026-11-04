@@ -2,10 +2,13 @@ package rhx
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -304,7 +307,93 @@ func testAuthManager(t *testing.T, server *httptest.Server, session *Session) *A
 	return &AuthManager{
 		Profile:     "test",
 		SessionPath: sessionPath,
-		Store:       CredentialStore{},
+		Store:       &recordingCredentialStore{},
 		Client:      client,
+	}
+}
+
+func TestCredentialOperationsForLoginAndLogout(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		force, fail bool
+	}{
+		{name: "environment login"}, {name: "forced login", force: true}, {name: "failed login", fail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RH_USERNAME", "synthetic-user")
+			t.Setenv("RH_PASSWORD", "synthetic-password")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/oauth2/token/" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				if err := r.ParseForm(); err != nil || r.Form.Get("username") != "synthetic-user" || r.Form.Get("password") != "synthetic-password" {
+					t.Error("unexpected login form")
+					w.WriteHeader(400)
+					return
+				}
+				if tc.fail {
+					w.WriteHeader(http.StatusUnauthorized)
+					_, _ = w.Write([]byte(`{"detail":"rejected"}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"access_token":"synthetic-token"}`))
+			}))
+			defer server.Close()
+			var old *Session
+			if tc.force {
+				old = &Session{AccessToken: "old"}
+			}
+			auth := testAuthManager(t, server, old)
+			store := auth.Store.(*recordingCredentialStore)
+			store.username, store.password = "stored-user", "stored-password"
+			_, err := auth.ensureBrokerageAuthenticatedWithOptions(context.Background(), brokerageAuthOptions{AllowPasswordLogin: true, Force: tc.force})
+			if (err != nil) != tc.fail {
+				t.Fatalf("login error = %v", err)
+			}
+			want := []string{"read brokerage:test"}
+			if !tc.fail {
+				want = append(want, "save brokerage:test")
+			}
+			if !reflect.DeepEqual(store.ops, want) {
+				t.Fatalf("operations = %v, want %v", store.ops, want)
+			}
+			if tc.fail {
+				if store.username != "stored-user" || store.password != "stored-password" {
+					t.Fatal("failed login changed credentials")
+				}
+				if _, err := os.Stat(auth.SessionPath); !os.IsNotExist(err) {
+					t.Fatalf("failed login left session: %v", err)
+				}
+			} else {
+				if store.username != "synthetic-user" || store.password != "synthetic-password" {
+					t.Fatal("login did not persist supplied credentials")
+				}
+				if _, err := loadSession(auth.SessionPath); err != nil {
+					t.Fatalf("saved session: %v", err)
+				}
+			}
+		})
+	}
+	for _, forget := range []bool{false, true} {
+		t.Run(fmt.Sprintf("logout forget=%t", forget), func(t *testing.T) {
+			server := httptest.NewServer(http.NotFoundHandler())
+			defer server.Close()
+			auth := testAuthManager(t, server, &Session{AccessToken: "old"})
+			store := auth.Store.(*recordingCredentialStore)
+			store.username, store.password, store.apiKey, store.privateKey = "u", "p", "k", "s"
+			auth.logout(forget)
+			if _, err := os.Stat(auth.SessionPath); !os.IsNotExist(err) {
+				t.Fatalf("session remains: %v", err)
+			}
+			if forget {
+				if !reflect.DeepEqual(store.ops, []string{"delete brokerage:test", "delete crypto:test"}) || store.username != "" || store.password != "" || store.apiKey != "" || store.privateKey != "" {
+					t.Fatal("logout did not delete both credential pairs")
+				}
+			} else if len(store.ops) != 0 || store.username != "u" || store.password != "p" || store.apiKey != "k" || store.privateKey != "s" {
+				t.Fatal("logout changed credentials")
+			}
+		})
 	}
 }
