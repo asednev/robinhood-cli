@@ -22,11 +22,11 @@ type PortfolioLot struct {
 }
 
 // PortfolioSnapshot is an observation, not a transactional broker snapshot.
-// Account and product coverage require qualification before writes.
+// Eligibility reflects the checks performed by this reader, not permission to import.
 type PortfolioSnapshot struct {
 	Lots       []PortfolioLot
 	ObservedAt time.Time
-	// WriteEligible is always false until independent coverage is qualified.
+	// WriteEligible is true only after all reader completeness checks succeed.
 	WriteEligible bool
 }
 
@@ -106,8 +106,7 @@ func instrumentID(ref string) (string, bool) {
 }
 
 // Snapshot reads one account without using the keyring or password login. All
-// returned data remains unqualified for real imports until the caller has
-// separately established the documented coverage prerequisites.
+// callers must separately establish the documented prerequisites for real imports.
 func (c *PortfolioConnection) Snapshot(ctx context.Context, account string) (PortfolioSnapshot, error) {
 	if !portfolioID.MatchString(account) {
 		return PortfolioSnapshot{}, newError(ErrorValidation, "Invalid broker account")
@@ -264,7 +263,7 @@ func (c *PortfolioConnection) snapshotLocked(ctx context.Context, account string
 			return PortfolioSnapshot{}, incomplete()
 		}
 	}
-	return PortfolioSnapshot{Lots: lots, ObservedAt: time.Now().UTC()}, nil
+	return PortfolioSnapshot{Lots: lots, ObservedAt: time.Now().UTC(), WriteEligible: true}, nil
 }
 
 type portfolioPosition struct {

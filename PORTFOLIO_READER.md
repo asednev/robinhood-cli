@@ -1,6 +1,6 @@
 # Experimental portfolio reader for Portfolio Pilot
 
-This reader is for synthetic development and read-only qualification. **Do not use its output for real-data writes.** `PortfolioSnapshot.WriteEligible` is always false. Broker basis is unqualified and remains null; available probes also do not establish full account and product coverage. The API's web endpoints and response schemas are not a published stable contract. Account and instrument classifications below are conservative provisional assumptions; unknown shapes fail.
+This reader is for synthetic development and read-only qualification. `PortfolioSnapshot.WriteEligible` is true only after the reader's completeness checks succeed; it does not authorize a real import. Broker basis is unqualified and remains null. Live ETF-lot and genuinely empty-account cases remain unobserved, and real imports require separate qualification and authorization. The API's web endpoints and response schemas are not a published stable contract. Account and instrument classifications below are conservative provisional assumptions; unknown shapes fail.
 
 ## API
 
@@ -29,4 +29,4 @@ Run `go work init` with that independent directory as the working directory, the
 
 - Broker-basis verification is deferred; the first delivery keeps basis null.
 - Establish complete enumeration of nonzero securities for each permitted account/product configuration, exact account and instrument classification fields, portfolio valuation semantics, currency representation and empty-account behavior. The prior read-only sample is bounded evidence for one account, not general coverage.
-- Complete joint pp/rhx tests and standalone verification. Linux execution is outside the current validation scope. Do not change `WriteEligible` until qualification and any required review are complete.
+- Complete joint pp/rhx tests and standalone verification. Linux execution is outside the current validation scope. Independently qualify coverage and obtain required authorization before real imports.

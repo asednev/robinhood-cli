@@ -330,6 +330,9 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 				if err == nil {
 					t.Fatal("expected error")
 				}
+				if snapshot.WriteEligible || len(snapshot.Lots) != 0 {
+					t.Fatal("incomplete snapshot returned eligible data")
+				}
 				if strings.Contains(err.Error(), "001") {
 					t.Fatalf("account leaked: %v", err)
 				}
@@ -338,7 +341,7 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(snapshot.Lots) != tc.wantLots || snapshot.WriteEligible {
+			if len(snapshot.Lots) != tc.wantLots || !snapshot.WriteEligible {
 				t.Fatalf("unexpected snapshot: %+v", snapshot)
 			}
 			if snapshot.Lots[0].Quantity != "1.25" || snapshot.Lots[0].OpenDate == nil || *snapshot.Lots[0].OpenDate != "2025-01-02" || snapshot.Lots[0].TaxCostBasis != nil || snapshot.Lots[0].BasisCurrency != nil || snapshot.Lots[1].Quantity != "0.25" || snapshot.Lots[1].TaxCostBasis != nil {
@@ -476,11 +479,11 @@ func TestPortfolioEmptyInventoryValuation(t *testing.T) {
 			c.auth.Client.client.Transport = rewriteTransport{target: target, base: http.DefaultTransport}
 			snapshot, err := c.Snapshot(context.Background(), "001")
 			if !tc.wantErr {
-				if err != nil || len(snapshot.Lots) != 0 || snapshot.WriteEligible {
+				if err != nil || len(snapshot.Lots) != 0 || !snapshot.WriteEligible {
 					t.Fatalf("empty: %v", err)
 				}
-			} else if err == nil {
-				t.Fatal("contradictory value accepted")
+			} else if err == nil || snapshot.WriteEligible || len(snapshot.Lots) != 0 {
+				t.Fatal("incomplete empty snapshot accepted")
 			}
 		})
 	}
