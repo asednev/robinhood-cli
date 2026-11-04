@@ -14,19 +14,19 @@ import (
 )
 
 // PortfolioLot contains broker-reported values, never inferred from prices.
-// Basis and date may be nil when the broker explicitly reports null. Currency
-// nil means no currency was reported; callers may apply their own USD default.
+// TaxCostBasis is nil while broker basis is unqualified. Date may be nil when
+// the broker reports null. A nil currency means none was reported.
 type PortfolioLot struct {
 	ID, Symbol, Quantity                  string
 	OpenDate, TaxCostBasis, BasisCurrency *string
 }
 
 // PortfolioSnapshot is an observation, not a transactional broker snapshot.
-// Its basis semantics and account/product coverage require qualification before writes.
+// Account and product coverage require qualification before writes.
 type PortfolioSnapshot struct {
 	Lots       []PortfolioLot
 	ObservedAt time.Time
-	// WriteEligible is always false until basis semantics and coverage are qualified.
+	// WriteEligible is always false until independent coverage is qualified.
 	WriteEligible bool
 }
 
@@ -91,7 +91,7 @@ func instrumentID(ref string) (string, bool) {
 
 // Snapshot reads one account without using the keyring or password login. All
 // returned data remains unqualified for real imports until the caller has
-// separately established the documented basis and coverage prerequisites.
+// separately established the documented coverage prerequisites.
 func (c *PortfolioConnection) Snapshot(ctx context.Context, account string) (PortfolioSnapshot, error) {
 	if !portfolioID.MatchString(account) {
 		return PortfolioSnapshot{}, newError(ErrorValidation, "Invalid broker account")
@@ -211,15 +211,6 @@ func (c *PortfolioConnection) snapshotLocked(ctx context.Context, account string
 					return PortfolioSnapshot{}, incomplete()
 				}
 			}
-			basis, ok := optionalString(row, "tax_cost_basis")
-			if !ok {
-				return PortfolioSnapshot{}, incomplete()
-			}
-			if basis != nil {
-				if _, ok := exactDecimal(*basis); !ok {
-					return PortfolioSnapshot{}, incomplete()
-				}
-			}
 			var currency *string
 			for _, key := range []string{"basis_currency", "tax_cost_basis_currency", "currency"} {
 				if raw, exists := row[key]; exists && raw != nil {
@@ -230,7 +221,7 @@ func (c *PortfolioConnection) snapshotLocked(ctx context.Context, account string
 					currency = &s
 				}
 			}
-			lots = append(lots, PortfolioLot{ID: lotID, Symbol: symbol, Quantity: qty, OpenDate: date, TaxCostBasis: basis, BasisCurrency: currency})
+			lots = append(lots, PortfolioLot{ID: lotID, Symbol: symbol, Quantity: qty, OpenDate: date, BasisCurrency: currency})
 		}
 		if sum.Cmp(pos.qty) != 0 {
 			return PortfolioSnapshot{}, incomplete()

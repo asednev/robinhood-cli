@@ -36,9 +36,19 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 				m["results"].([]any)[0].(map[string]any)["quantity"] = "2"
 			}
 		}},
-		{name: "excess precision", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+		{name: "excess basis precision ignored", wantLots: 2, mutate: func(p string, m map[string]any, _ int) {
 			if strings.HasPrefix(p, "/tax_lots/") {
 				m["results"].([]any)[0].(map[string]any)["tax_cost_basis"] = "1.0000000000000000001"
+			}
+		}},
+		{name: "excess quantity precision", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if strings.HasPrefix(p, "/tax_lots/") {
+				m["results"].([]any)[0].(map[string]any)["quantity"] = "1.2500000000000000001"
+			}
+		}},
+		{name: "malformed basis ignored", wantLots: 2, mutate: func(p string, m map[string]any, _ int) {
+			if strings.HasPrefix(p, "/tax_lots/") {
+				m["results"].([]any)[0].(map[string]any)["tax_cost_basis"] = map[string]any{"unexpected": true}
 			}
 		}},
 		{name: "explicit foreign currency", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
@@ -56,7 +66,12 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 				m["results"].([]any)[0].(map[string]any)["open_date"] = "2025-02-30"
 			}
 		}},
-		{name: "missing basis", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+		{name: "unknown date", wantLots: 2, mutate: func(p string, m map[string]any, _ int) {
+			if strings.HasPrefix(p, "/tax_lots/") {
+				m["results"].([]any)[1].(map[string]any)["open_date"] = nil
+			}
+		}},
+		{name: "missing basis ignored", wantLots: 2, mutate: func(p string, m map[string]any, _ int) {
 			if strings.HasPrefix(p, "/tax_lots/") {
 				delete(m["results"].([]any)[0].(map[string]any), "tax_cost_basis")
 			}
@@ -145,7 +160,7 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 					b["open_lot_id"] = "two"
 					b["quantity"] = "0.25"
 					b["tax_cost_basis"] = nil
-					b["open_date"] = nil
+					b["open_date"] = "2024-06-07"
 					m = page(a, b)
 				default:
 					t.Errorf("unexpected path %s", r.URL.Path)
@@ -185,8 +200,18 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 			if len(snapshot.Lots) != tc.wantLots || snapshot.WriteEligible {
 				t.Fatalf("unexpected snapshot: %+v", snapshot)
 			}
-			if snapshot.Lots[0].Quantity != "1.25" || *snapshot.Lots[0].TaxCostBasis != "51.123" || snapshot.Lots[0].BasisCurrency != nil || snapshot.Lots[1].OpenDate != nil || snapshot.Lots[1].TaxCostBasis != nil {
+			if snapshot.Lots[0].Quantity != "1.25" || snapshot.Lots[0].OpenDate == nil || *snapshot.Lots[0].OpenDate != "2025-01-02" || snapshot.Lots[0].TaxCostBasis != nil || snapshot.Lots[0].BasisCurrency != nil || snapshot.Lots[1].Quantity != "0.25" || snapshot.Lots[1].TaxCostBasis != nil {
 				t.Fatal("lot mapping failed")
+			}
+			if tc.name == "unknown date" {
+				if snapshot.Lots[1].OpenDate != nil {
+					t.Fatal("unknown date not retained")
+				}
+			} else if snapshot.Lots[1].OpenDate == nil || *snapshot.Lots[1].OpenDate != "2024-06-07" {
+				t.Fatal("individual date not retained")
+			}
+			if tc.name == "explicit USD" && (snapshot.Lots[1].BasisCurrency == nil || *snapshot.Lots[1].BasisCurrency != "USD") {
+				t.Fatal("USD currency not retained")
 			}
 		})
 	}
