@@ -14,7 +14,7 @@ import (
 )
 
 // PortfolioLot contains broker-reported values, never inferred from prices.
-// TaxCostBasis is nil while broker basis is unqualified. Date may be nil when
+// TaxCostBasis is nil while broker basis is unqualified. OpenDate may be nil when
 // the broker reports null. A nil currency means none was reported.
 type PortfolioLot struct {
 	ID, Symbol, Quantity                  string

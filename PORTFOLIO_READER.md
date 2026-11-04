@@ -4,6 +4,8 @@ This reader is for synthetic development and read-only qualification. `Portfolio
 
 ## API
 
+Session operations require macOS or Linux; other platforms return `ErrorAuthRequired`. Linux execution is outside the current validation scope.
+
 `NewPortfolioConnection(profile, sessionDir)` creates a connection for a path-safe profile (empty selects `default`). An empty directory selects rhx's normal host-local session directory; an explicit directory must be absolute. `Login(ctx, PortfolioCredentials{Username, Password}, waitForChallenge)` injects credentials for explicit authentication without a keyring. Human verification uses the existing interactive challenge flow when enabled. `RefreshSession(ctx)` uses only an existing session and never starts password login or waits for a challenge. `Snapshot(ctx, accountNumber)` also performs session-only authentication and reads one exact account. It may refresh an expired session and persist the refreshed session, so it is not a GET-only or session-write-free operation. A `CLIError` code distinguishes `ErrorAuthRequired`, `ErrorBrokerAccountMismatch`, and `ErrorIncompleteSnapshot`. Context cancellation and deadline errors propagate. Do not log credentials, full account numbers, session contents, or raw HTTP responses.
 
 Calls for the same profile through this API serialize across processes using a private lock file; refreshed sessions are replaced atomically with owner-only permissions. Other existing rhx interfaces do not participate in that lock and must not update the same session concurrently. Separate profiles use separate files. Login takes credentials in memory and does not persist them in the keyring. The caller is responsible for secure credential sourcing. The reader rejects redirects and limits authenticated pages to the expected HTTPS API origin and endpoint; it performs no retries and bounds reads by context and request timeouts.
@@ -29,4 +31,4 @@ Run `go work init` with that independent directory as the working directory, the
 
 - Broker-basis verification is deferred; the first delivery keeps basis null.
 - Establish complete enumeration of nonzero securities for each permitted account/product configuration, exact account and instrument classification fields, portfolio valuation semantics, currency representation and empty-account behavior. The prior read-only sample is bounded evidence for one account, not general coverage.
-- Complete joint pp/rhx tests and standalone verification. Linux execution is outside the current validation scope. Independently qualify coverage and obtain required authorization before real imports.
+- Complete joint pp/rhx tests and standalone verification. Independently qualify coverage and obtain required authorization before real imports.
