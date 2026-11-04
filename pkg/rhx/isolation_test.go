@@ -2,11 +2,22 @@ package rhx
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+type loopbackOnlyTransport struct{ base http.RoundTripper }
+
+func (t loopbackOnlyTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	ip := net.ParseIP(r.URL.Hostname())
+	if ip == nil || !ip.IsLoopback() {
+		return nil, fmt.Errorf("external test destination blocked: %s", r.URL.Redacted())
+	}
+	return t.base.RoundTrip(r)
+}
 
 type loopbackTransport struct {
 	target string
@@ -26,6 +37,7 @@ func TestMain(m *testing.M) {
 	if nativeCredentialHelper() {
 		os.Exit(m.Run())
 	}
+	http.DefaultTransport = loopbackOnlyTransport{base: http.DefaultTransport}
 	captureNativeTestPath()
 	dir, err := os.MkdirTemp("", "rhx-test-tools-")
 	if err != nil {
