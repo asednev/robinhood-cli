@@ -146,6 +146,41 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 				m["results"].([]any)[0].(map[string]any)["quantity"] = "9"
 			}
 		}},
+		{name: "option opens on recheck", wantErr: true, mutate: func(p string, m map[string]any, n int) {
+			if p == "/options/positions/" && n == 1 {
+				m["results"] = []any{map[string]any{"account_number": "001", "account": "https://api.robinhood.com/accounts/001/", "quantity": "1"}}
+			}
+		}},
+		{name: "short position", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if p == "/positions/" {
+				m["results"].([]any)[0].(map[string]any)["quantity"] = "-1"
+			}
+		}},
+		{name: "missing options page terminator", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if p == "/options/positions/" {
+				delete(m, "next")
+			}
+		}},
+		{name: "malformed positions page", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if p == "/positions/" {
+				m["results"] = map[string]any{}
+			}
+		}},
+		{name: "foreign position owner", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if p == "/positions/" {
+				m["results"].([]any)[0].(map[string]any)["account_number"] = "002"
+			}
+		}},
+		{name: "missing securities valuation", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if p == "/portfolios/001/" {
+				delete(m, "market_value")
+			}
+		}},
+		{name: "invalid securities valuation", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if p == "/portfolios/001/" {
+				m["market_value"] = "invalid"
+			}
+		}},
 		{name: "unsupported option", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
 			if p == "/options/positions/" {
 				m["results"] = []any{map[string]any{"account_number": "001", "account": "https://api.robinhood.com/accounts/001/", "quantity": "1"}}
@@ -395,8 +430,18 @@ func TestPortfolioPagesAndRedirects(t *testing.T) {
 func TestPortfolioEmptyInventoryValuation(t *testing.T) {
 	// A separate zero-unit crypto record is outside the scoped brokerage API.
 	// The reader must neither include it nor make crypto calls.
-	for _, market := range []string{"0.00", "7.00"} {
-		t.Run(market, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, market, broken string
+		wantErr              bool
+	}{
+		{"verified shape", "0.00", "", false},
+		{"contradictory value", "7.00", "", true},
+		{"missing value", "0.00", "missing value", true},
+		{"malformed value", "invalid", "", true},
+		{"incomplete equities", "0.00", "positions", true},
+		{"incomplete options", "0.00", "options", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/holdings/":
@@ -405,9 +450,17 @@ func TestPortfolioEmptyInventoryValuation(t *testing.T) {
 				case "/accounts/":
 					fmt.Fprint(w, `{"results":[{"account_number":"001","url":"https://api.robinhood.com/accounts/001/","brokerage_account_type":"individual","state":"active","management_type":"self_directed","affiliate":"rhf","type":"cash","deactivated":false,"has_futures_account":false,"advisory_account_variant":null}],"next":null}`)
 				case "/positions/", "/options/positions/":
+					if (tc.broken == "positions" && r.URL.Path == "/positions/") || (tc.broken == "options" && r.URL.Path == "/options/positions/") {
+						fmt.Fprint(w, `{"results":[]}`)
+						return
+					}
 					fmt.Fprint(w, `{"results":[],"next":null}`)
 				case "/portfolios/001/":
-					fmt.Fprintf(w, `{"account":"https://api.robinhood.com/accounts/001/","market_value":%q}`, market)
+					if tc.broken == "missing value" {
+						fmt.Fprint(w, `{"account":"https://api.robinhood.com/accounts/001/"}`)
+					} else {
+						fmt.Fprintf(w, `{"account":"https://api.robinhood.com/accounts/001/","market_value":%q}`, tc.market)
+					}
 				default:
 					t.Errorf("unexpected path %s", r.URL.Path)
 					w.WriteHeader(500)
@@ -422,7 +475,7 @@ func TestPortfolioEmptyInventoryValuation(t *testing.T) {
 			target, _ := url.Parse(server.URL)
 			c.auth.Client.client.Transport = rewriteTransport{target: target, base: http.DefaultTransport}
 			snapshot, err := c.Snapshot(context.Background(), "001")
-			if market == "0.00" {
+			if !tc.wantErr {
 				if err != nil || len(snapshot.Lots) != 0 || snapshot.WriteEligible {
 					t.Fatalf("empty: %v", err)
 				}
