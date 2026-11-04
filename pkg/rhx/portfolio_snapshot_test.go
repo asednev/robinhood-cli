@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -566,7 +567,128 @@ func TestPortfolioRequestDeadline(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	_, err := c.portfolioPages(ctx, "/accounts/", nil)
-	if err == nil || time.Since(started) > time.Second {
+	if err != context.DeadlineExceeded || time.Since(started) > time.Second {
 		t.Fatalf("deadline not bounded: %v", err)
+	}
+}
+
+type portfolioBodyReadTransport struct {
+	base    http.RoundTripper
+	reading chan struct{}
+}
+
+func (t portfolioBodyReadTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(r)
+	if err == nil && resp.Header.Get("X-Stalled-Body") == "true" {
+		resp.Body = &portfolioBodyReadSignal{ReadCloser: resp.Body, reading: t.reading}
+	}
+	return resp, err
+}
+
+type portfolioBodyReadSignal struct {
+	io.ReadCloser
+	reading chan struct{}
+}
+
+func (b *portfolioBodyReadSignal) Read(p []byte) (int, error) {
+	if b.reading != nil {
+		close(b.reading)
+		b.reading = nil
+	}
+	return b.ReadCloser.Read(p)
+}
+
+func TestPortfolioResponseBodyContext(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		pages      bool
+	}{
+		{"valuation", "/portfolios/001/", false},
+		{"instrument", "/instruments/abc/", false},
+		{"accounts", "/accounts/", true},
+		{"positions", "/positions/", true},
+		{"options", "/options/positions/", true},
+		{"lots", "/tax_lots/open/001/abc/", true},
+		{"snapshot", "/accounts/", false},
+	} {
+		for _, deadline := range []bool{false, true} {
+			mode := "cancel"
+			if deadline {
+				mode = "deadline"
+			}
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				requests := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requests++
+					if tc.name == "snapshot" && requests == 1 {
+						fmt.Fprint(w, `{"results":[],"next":null}`)
+						return
+					}
+					if tc.pages && r.URL.Query().Get("cursor") == "" {
+						fmt.Fprintf(w, `{"results":[{"id":"partial"}],"next":%q}`, robinhoodAPIBase+tc.path+"?cursor=next")
+						return
+					}
+					w.Header().Set("X-Stalled-Body", "true")
+					fmt.Fprint(w, `{`)
+					w.(http.Flusher).Flush()
+					<-r.Context().Done()
+				}))
+				defer server.Close()
+				dir := t.TempDir()
+				if err := saveSession(sessionPath(dir, "default"), Session{AccessToken: "fixture"}); err != nil {
+					t.Fatal(err)
+				}
+				c, err := NewPortfolioConnection("default", dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				target, _ := url.Parse(server.URL)
+				reading := make(chan struct{})
+				c.auth.Client.client.Transport = portfolioBodyReadTransport{
+					base:    rewriteTransport{target: target, base: http.DefaultTransport},
+					reading: reading,
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+				defer cancel()
+				want := context.DeadlineExceeded
+				if !deadline {
+					want = context.Canceled
+					go func() {
+						select {
+						case <-reading:
+							cancel()
+						case <-ctx.Done():
+						}
+					}()
+				}
+				if tc.name == "snapshot" {
+					var snapshot PortfolioSnapshot
+					snapshot, err = c.Snapshot(ctx, "001")
+					if snapshot.WriteEligible || len(snapshot.Lots) != 0 {
+						t.Fatal("interrupted snapshot returned eligible data")
+					}
+				} else if tc.pages {
+					var rows []map[string]any
+					rows, err = c.portfolioPages(ctx, tc.path, nil)
+					if len(rows) != 0 {
+						t.Fatal("interrupted pagination returned partial rows")
+					}
+				} else {
+					var obj map[string]any
+					obj, err = c.portfolioObject(ctx, tc.path)
+					if obj != nil {
+						t.Fatal("interrupted read returned an object")
+					}
+				}
+				select {
+				case <-reading:
+				default:
+					t.Fatal("context ended before response body reading began")
+				}
+				if err != want {
+					t.Fatalf("error = %v, want %v", err, want)
+				}
+			})
+		}
 	}
 }

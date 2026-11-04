@@ -347,6 +347,9 @@ func (c *PortfolioConnection) portfolioObject(ctx context.Context, path string) 
 		return nil, incomplete()
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err != nil || len(data) >= 4<<20 {
 		return nil, incomplete()
 	}
