@@ -20,6 +20,11 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 		wantLots int
 	}{
 		{name: "two lots with reserved shares", wantLots: 2},
+		{name: "generic ETP lots", wantLots: 2, mutate: func(p string, m map[string]any, _ int) {
+			if p == "/instruments/abc/" {
+				m["type"] = "etp"
+			}
+		}},
 		{name: "matching optional references", wantLots: 2, mutate: func(p string, m map[string]any, _ int) {
 			if strings.HasPrefix(p, "/tax_lots/") {
 				row := m["results"].([]any)[0].(map[string]any)
