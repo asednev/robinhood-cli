@@ -80,6 +80,22 @@ func accountOwned(row map[string]any, account string) bool {
 	ref, ok := requiredString(row, "account")
 	return ok && ref == robinhoodAPIBase+"/accounts/"+account+"/"
 }
+func lotOwned(row map[string]any, account, instrument string) bool {
+	n, nok := requiredString(row, "account_number")
+	id, iok := requiredString(row, "instrument_id")
+	if !nok || n != account || !iok || id != instrument {
+		return false
+	}
+	for key, expected := range map[string]string{
+		"account":    robinhoodAPIBase + "/accounts/" + account + "/",
+		"instrument": robinhoodAPIBase + "/instruments/" + instrument + "/",
+	} {
+		if ref, exists := row[key]; exists && ref != expected {
+			return false
+		}
+	}
+	return true
+}
 func instrumentID(ref string) (string, bool) {
 	prefix := robinhoodAPIBase + "/instruments/"
 	if !strings.HasPrefix(ref, prefix) || !strings.HasSuffix(ref, "/") {
@@ -180,15 +196,10 @@ func (c *PortfolioConnection) snapshotLocked(ctx context.Context, account string
 		sum := new(big.Rat)
 		for _, row := range rows {
 			lotID, ok := requiredString(row, "open_lot_id")
-			if !ok || seen[lotID] || !accountOwned(row, account) {
+			if !ok || seen[lotID] || !lotOwned(row, account, id) {
 				return PortfolioSnapshot{}, incomplete()
 			}
 			seen[lotID] = true
-			ref, ok := requiredString(row, "instrument")
-			rid, valid := instrumentID(ref)
-			if !ok || !valid || rid != id {
-				return PortfolioSnapshot{}, incomplete()
-			}
 			qty, ok := requiredString(row, "quantity")
 			amount, valid := exactDecimal(qty)
 			if !ok || !valid || amount.Sign() <= 0 {

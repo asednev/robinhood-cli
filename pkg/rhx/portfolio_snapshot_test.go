@@ -20,6 +20,43 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 		wantLots int
 	}{
 		{name: "two lots with reserved shares", wantLots: 2},
+		{name: "matching optional references", wantLots: 2, mutate: func(p string, m map[string]any, _ int) {
+			if strings.HasPrefix(p, "/tax_lots/") {
+				row := m["results"].([]any)[0].(map[string]any)
+				row["account"] = "https://api.robinhood.com/accounts/001/"
+				row["instrument"] = "https://api.robinhood.com/instruments/abc/"
+			}
+		}},
+		{name: "missing direct account", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if strings.HasPrefix(p, "/tax_lots/") {
+				delete(m["results"].([]any)[0].(map[string]any), "account_number")
+			}
+		}},
+		{name: "missing direct instrument", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if strings.HasPrefix(p, "/tax_lots/") {
+				delete(m["results"].([]any)[0].(map[string]any), "instrument_id")
+			}
+		}},
+		{name: "foreign direct instrument", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if strings.HasPrefix(p, "/tax_lots/") {
+				m["results"].([]any)[0].(map[string]any)["instrument_id"] = "other"
+			}
+		}},
+		{name: "contradictory account reference", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if strings.HasPrefix(p, "/tax_lots/") {
+				m["results"].([]any)[0].(map[string]any)["account"] = "https://api.robinhood.com/accounts/002/"
+			}
+		}},
+		{name: "contradictory instrument reference", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if strings.HasPrefix(p, "/tax_lots/") {
+				m["results"].([]any)[0].(map[string]any)["instrument"] = "https://api.robinhood.com/instruments/other/"
+			}
+		}},
+		{name: "null account reference", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if strings.HasPrefix(p, "/tax_lots/") {
+				m["results"].([]any)[0].(map[string]any)["account"] = nil
+			}
+		}},
 		{name: "duplicate lot ID", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
 			if strings.HasPrefix(p, "/tax_lots/") {
 				rows := m["results"].([]any)
@@ -152,6 +189,11 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 					m = map[string]any{"id": "abc", "symbol": "XYZ", "type": "stock"}
 				case "/tax_lots/open/001/abc/":
 					a, b := owner(), owner()
+					for _, row := range []map[string]any{a, b} {
+						delete(row, "account")
+						delete(row, "instrument")
+						row["instrument_id"] = "abc"
+					}
 					a["open_lot_id"] = "one"
 					a["quantity"] = "1.25"
 					a["quantity_available"] = "0.25"
@@ -361,6 +403,7 @@ func TestPortfolioSharedSessionTwoAccountIsolation(t *testing.T) {
 			parts := strings.Split(r.URL.Path, "/")
 			n := parts[3]
 			row := owner(n)
+			row["instrument_id"] = "shared"
 			row["open_lot_id"] = "lot-" + n
 			row["quantity"] = "1"
 			row["tax_cost_basis"] = "2"
