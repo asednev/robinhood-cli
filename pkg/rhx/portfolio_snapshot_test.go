@@ -20,9 +20,27 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 		wantLots int
 	}{
 		{name: "two lots with reserved shares", wantLots: 2},
-		{name: "generic ETP lots", wantLots: 2, mutate: func(p string, m map[string]any, _ int) {
+		{name: "ETF lots", wantLots: 2, mutate: func(p string, m map[string]any, _ int) {
 			if p == "/instruments/abc/" {
 				m["type"] = "etp"
+				m["tax_security_type"] = "etf"
+			}
+		}},
+		{name: "ETN rejected", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if p == "/instruments/abc/" {
+				m["type"] = "etp"
+				m["tax_security_type"] = "etn"
+			}
+		}},
+		{name: "missing ETF subtype", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if p == "/instruments/abc/" {
+				m["type"] = "etp"
+			}
+		}},
+		{name: "unknown ETF subtype", wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if p == "/instruments/abc/" {
+				m["type"] = "etp"
+				m["tax_security_type"] = "other"
 			}
 		}},
 		{name: "matching optional references", wantLots: 2, mutate: func(p string, m map[string]any, _ int) {
@@ -154,6 +172,47 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 			}
 		}},
 	}
+	for _, field := range []struct {
+		key   string
+		wrong any
+	}{
+		{"management_type", "managed"}, {"affiliate", "other"}, {"type", "ira"},
+		{"deactivated", true}, {"has_futures_account", true}, {"advisory_account_variant", "managed"},
+	} {
+		for _, missing := range []bool{false, true} {
+			name := "invalid " + field.key
+			if missing {
+				name = "missing " + field.key
+			}
+			cases = append(cases, struct {
+				name     string
+				mutate   func(string, map[string]any, int)
+				wantErr  bool
+				wantLots int
+			}{name: name, wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+				if p == "/accounts/" {
+					row := m["results"].([]any)[1].(map[string]any)
+					if missing {
+						delete(row, field.key)
+					} else {
+						row[field.key] = field.wrong
+					}
+				}
+			}})
+		}
+	}
+	for _, key := range []string{"management_type", "affiliate", "type", "deactivated", "has_futures_account", "advisory_account_variant"} {
+		cases = append(cases, struct {
+			name     string
+			mutate   func(string, map[string]any, int)
+			wantErr  bool
+			wantLots int
+		}{name: "wrong type " + key, wantErr: true, mutate: func(p string, m map[string]any, _ int) {
+			if p == "/accounts/" {
+				m["results"].([]any)[1].(map[string]any)[key] = []any{}
+			}
+		}})
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			positions := 0
@@ -168,7 +227,7 @@ func TestPortfolioSnapshotSynthetic(t *testing.T) {
 					return map[string]any{"results": rows, "next": nil}
 				}
 				account := func(n string) map[string]any {
-					return map[string]any{"account_number": n, "url": "https://api.robinhood.com/accounts/" + n + "/", "brokerage_account_type": "individual", "state": "active"}
+					return map[string]any{"account_number": n, "url": "https://api.robinhood.com/accounts/" + n + "/", "brokerage_account_type": "individual", "state": "active", "management_type": "self_directed", "affiliate": "rhf", "type": "margin", "deactivated": false, "has_futures_account": false, "advisory_account_variant": nil}
 				}
 				owner := func() map[string]any {
 					return map[string]any{"account_number": "001", "account": "https://api.robinhood.com/accounts/001/", "instrument": "https://api.robinhood.com/instruments/abc/"}
@@ -344,7 +403,7 @@ func TestPortfolioEmptyInventoryValuation(t *testing.T) {
 					t.Error("unrelated crypto account was queried")
 					fmt.Fprint(w, `{"results":[{"quantity":"0","account_number":"crypto-other"}],"next":null}`)
 				case "/accounts/":
-					fmt.Fprint(w, `{"results":[{"account_number":"001","url":"https://api.robinhood.com/accounts/001/","brokerage_account_type":"individual","state":"active"}],"next":null}`)
+					fmt.Fprint(w, `{"results":[{"account_number":"001","url":"https://api.robinhood.com/accounts/001/","brokerage_account_type":"individual","state":"active","management_type":"self_directed","affiliate":"rhf","type":"cash","deactivated":false,"has_futures_account":false,"advisory_account_variant":null}],"next":null}`)
 				case "/positions/", "/options/positions/":
 					fmt.Fprint(w, `{"results":[],"next":null}`)
 				case "/portfolios/001/":
@@ -387,7 +446,10 @@ func TestPortfolioSharedSessionTwoAccountIsolation(t *testing.T) {
 		}
 		switch {
 		case r.URL.Path == "/accounts/":
-			page(map[string]any{"account_number": "001", "url": "https://api.robinhood.com/accounts/001/", "brokerage_account_type": "individual", "state": "active"}, map[string]any{"account_number": "002", "url": "https://api.robinhood.com/accounts/002/", "brokerage_account_type": "individual", "state": "active"})
+			account := func(n string) map[string]any {
+				return map[string]any{"account_number": n, "url": "https://api.robinhood.com/accounts/" + n + "/", "brokerage_account_type": "individual", "state": "active", "management_type": "self_directed", "affiliate": "rhf", "type": "margin", "deactivated": false, "has_futures_account": false, "advisory_account_variant": nil}
+			}
+			page(account("001"), account("002"))
 		case r.URL.Path == "/positions/":
 			n := r.URL.Query().Get("account_number")
 			if n == "" {

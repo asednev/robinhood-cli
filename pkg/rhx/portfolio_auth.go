@@ -70,7 +70,7 @@ func (c *PortfolioConnection) refreshSessionLocked(ctx context.Context) error {
 		return newError(ErrorAuthRequired, "Brokerage authentication required")
 	}
 	c.auth.Client.setSession(session)
-	data, status, err := c.auth.Client.getRaw(ctx, robinhoodAPIBase+"/positions/", map[string]string{"nonzero": "true"})
+	data, status, err := c.auth.Client.getRaw(ctx, robinhoodAPIBase+"/accounts/", map[string]string{"default_to_all_accounts": "true"})
 	if err != nil {
 		return portfolioAuthError(err)
 	}

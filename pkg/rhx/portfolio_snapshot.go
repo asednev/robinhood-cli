@@ -149,7 +149,15 @@ func (c *PortfolioConnection) snapshotLocked(ctx context.Context, account string
 		typ, tok := requiredString(row, "brokerage_account_type")
 		state, sok := requiredString(row, "state")
 		ref, rok := requiredString(row, "url")
-		if !tok || typ != "individual" || !sok || state != "active" || !rok || ref != robinhoodAPIBase+"/accounts/"+account+"/" {
+		management, mok := requiredString(row, "management_type")
+		affiliate, aok := requiredString(row, "affiliate")
+		accountType, cok := requiredString(row, "type")
+		deactivated, dok := row["deactivated"].(bool)
+		futures, fok := row["has_futures_account"].(bool)
+		advisory, vok := row["advisory_account_variant"]
+		if !tok || typ != "individual" || !sok || state != "active" || !rok || ref != robinhoodAPIBase+"/accounts/"+account+"/" ||
+			!mok || management != "self_directed" || !aok || affiliate != "rhf" || !cok || (accountType != "cash" && accountType != "margin") ||
+			!dok || deactivated || !fok || futures || !vok || advisory != nil {
 			return PortfolioSnapshot{}, incomplete()
 		}
 	}
@@ -185,6 +193,12 @@ func (c *PortfolioConnection) snapshotLocked(ctx context.Context, account string
 		typ, tok := requiredString(detail, "type")
 		if !iok || id != pos.id || !sok || !tok || (typ != "stock" && typ != "etp") {
 			return PortfolioSnapshot{}, incomplete()
+		}
+		if typ == "etp" {
+			subtype, ok := requiredString(detail, "tax_security_type")
+			if !ok || subtype != "etf" {
+				return PortfolioSnapshot{}, incomplete()
+			}
 		}
 		if pos.symbol != "" && pos.symbol != symbol {
 			return PortfolioSnapshot{}, incomplete()

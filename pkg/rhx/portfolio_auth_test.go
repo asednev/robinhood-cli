@@ -1,6 +1,7 @@
 package rhx
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -16,11 +17,53 @@ import (
 	"time"
 )
 
+func TestPortfolioValidSessionUsesAccountProbeWithoutRefresh(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/accounts/" || r.URL.Query().Get("default_to_all_accounts") != "true" || r.Header.Get("Authorization") != "Bearer fixture" {
+			t.Errorf("unexpected authentication probe: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, `{"results":[],"next":null}`)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	path := sessionPath(dir, "default")
+	if err := saveSession(path, Session{AccessToken: "fixture", RefreshToken: "unused"}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := NewPortfolioConnection("default", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := url.Parse(server.URL)
+	c.auth.Client.client.Transport = rewriteTransport{target: target, base: http.DefaultTransport}
+	if err := c.RefreshSession(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, err := os.Stat(path)
+	if err != nil || !bytes.Equal(before, after) || !os.SameFile(info, last) || !info.ModTime().Equal(last.ModTime()) {
+		t.Fatal("valid session was modified")
+	}
+}
+
 func TestPortfolioConnectionConcurrentRefresh(t *testing.T) {
 	var refreshes atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/positions/":
+		case "/accounts/":
 			if r.Header.Get("Authorization") != "Bearer new" {
 				w.WriteHeader(401)
 				fmt.Fprint(w, `{"detail":"secret"}`)
@@ -106,7 +149,7 @@ func TestPortfolioRefreshCrossProcess(t *testing.T) {
 	var refreshes atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/positions/":
+		case "/accounts/":
 			if r.Header.Get("Authorization") != "Bearer rotated" {
 				w.WriteHeader(401)
 				return
@@ -216,7 +259,7 @@ func TestPortfolioRefreshChallengeAndRevocationNeverLogIn(t *testing.T) {
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case "/positions/":
+				case "/accounts/":
 					w.WriteHeader(http.StatusUnauthorized)
 				case "/oauth2/token/":
 					calls.Add(1)
