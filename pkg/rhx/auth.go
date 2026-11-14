@@ -3,6 +3,7 @@ package rhx
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -322,12 +323,12 @@ func (a *AuthManager) waitForSheriffChallenge(ctx context.Context, inquiryURL st
 		if err := sleepContext(ctx, authPollInterval); err != nil {
 			return err
 		}
-		data, status, err := a.Client.getRaw(ctx, inquiryURL, nil)
-		if err != nil {
-			return err
+		data, _, err := a.Client.getRaw(ctx, inquiryURL, nil)
+		if terminalErr := authPollingError(ctx, err); terminalErr != nil {
+			return terminalErr
 		}
-		if status >= 400 {
-			return newError(ErrorMFARequired, "Brokerage challenge unavailable")
+		if err != nil {
+			continue
 		}
 		challenge := sheriffChallenge(data)
 		if len(challenge) == 0 {
@@ -356,7 +357,7 @@ func (a *AuthManager) waitForSheriffChallenge(ctx context.Context, inquiryURL st
 			if !canPromptForVerificationCode() {
 				return newError(ErrorMFARequired, "Robinhood verification code required. Run `rhx auth login` in an interactive terminal.")
 			}
-			code, err := promptVerificationCode(challengeType)
+			code, err := promptVerificationCode(ctx, challengeType)
 			if err != nil {
 				return err
 			}
@@ -383,12 +384,12 @@ func (a *AuthManager) waitForPromptChallenge(ctx context.Context, challengeID st
 		if err := sleepContext(ctx, authPollInterval); err != nil {
 			return err
 		}
-		data, status, err := a.Client.getRaw(ctx, promptURL, nil)
-		if err != nil {
-			return err
+		data, _, err := a.Client.getRaw(ctx, promptURL, nil)
+		if terminalErr := authPollingError(ctx, err); terminalErr != nil {
+			return terminalErr
 		}
-		if status >= 400 {
-			return newError(ErrorMFARequired, "Brokerage challenge unavailable")
+		if err != nil {
+			continue
 		}
 		challengeStatus, _ := asMap(data)["challenge_status"].(string)
 		if challengeStatus == "validated" {
@@ -406,13 +407,10 @@ func (a *AuthManager) waitForWorkflowApproval(ctx context.Context, inquiryURL st
 				"status": "continue",
 			},
 		})
-		if err != nil {
-			return err
+		if terminalErr := authPollingError(ctx, err); terminalErr != nil {
+			return terminalErr
 		}
-		if status >= 400 {
-			return newError(ErrorMFARequired, "Brokerage challenge unavailable")
-		}
-		if workflowApproved(data) {
+		if err == nil && status < 500 && workflowApproved(data) {
 			fmt.Fprintln(os.Stderr, "Robinhood verification approved.")
 			return nil
 		}
@@ -421,6 +419,16 @@ func (a *AuthManager) waitForWorkflowApproval(ctx context.Context, inquiryURL st
 		}
 	}
 	return newError(ErrorMFARequired, "Robinhood verification workflow timed out")
+}
+
+func authPollingError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, ErrQuoteBudget) {
+		return err
+	}
+	return nil
 }
 
 func canWaitForAuthChallenge() bool {
@@ -474,10 +482,12 @@ func challengeDetail(payload map[string]any) string {
 	return "Brokerage authentication failed"
 }
 
-func promptVerificationCode(challengeType string) (string, error) {
-	reader := bufio.NewReader(os.Stdin)
+func promptVerificationCode(ctx context.Context, challengeType string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	fmt.Fprintf(os.Stderr, "Enter the %s verification code sent by Robinhood: ", challengeType)
-	line, err := reader.ReadString('\n')
+	line, err := readVerificationLine(ctx, os.Stdin)
 	if err != nil {
 		return "", err
 	}

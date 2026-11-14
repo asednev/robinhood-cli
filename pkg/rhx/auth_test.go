@@ -2,6 +2,7 @@ package rhx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -227,6 +228,95 @@ func TestLoginWaitsForPromptWorkflowWhenEnabled(t *testing.T) {
 	}
 	if tokenRequests != 2 {
 		t.Fatalf("token requests = %d, want 2", tokenRequests)
+	}
+}
+
+func TestAuthPollingRetriesAndTerminalErrors(t *testing.T) {
+	oldPollInterval := authPollInterval
+	authPollInterval = time.Millisecond
+	defer func() { authPollInterval = oldPollInterval }()
+
+	for _, poll := range []struct {
+		name string
+		body string
+		run  func(*AuthManager, context.Context, time.Time) error
+	}{
+		{"sheriff", `{"context":{"sheriff_challenge":{"status":"validated"}}}`, func(a *AuthManager, ctx context.Context, deadline time.Time) error {
+			return a.waitForSheriffChallenge(ctx, robinhoodAPIBase+"/pathfinder/inquiries/machine/user_view/", deadline)
+		}},
+		{"prompt", `{"challenge_status":"validated"}`, func(a *AuthManager, ctx context.Context, deadline time.Time) error {
+			return a.waitForPromptChallenge(ctx, "challenge", deadline)
+		}},
+		{"workflow", `{"type_context":{"result":"workflow_status_approved"}}`, func(a *AuthManager, ctx context.Context, deadline time.Time) error {
+			return a.waitForWorkflowApproval(ctx, robinhoodAPIBase+"/pathfinder/inquiries/machine/user_view/", deadline)
+		}},
+	} {
+		for _, failure := range []struct {
+			name   string
+			status int
+			err    error
+			body   bool
+			cancel bool
+			expire bool
+			want   error
+		}{
+			{name: "success", status: 200},
+			{name: "service unavailable", status: 503},
+			{name: "rate limited", status: 429},
+			{name: "transport failure", err: errors.New("temporary transport failure")},
+			{name: "request budget", err: ErrQuoteBudget, want: ErrQuoteBudget},
+			{name: "body budget", body: true, want: ErrQuoteBudget},
+			{name: "canceled request", err: context.Canceled},
+			{name: "request timeout", err: context.DeadlineExceeded},
+			{name: "deadline", expire: true, want: context.DeadlineExceeded},
+			{name: "canceled context", cancel: true, err: errors.New("interrupted"), want: context.Canceled},
+		} {
+			t.Run(poll.name+"/"+failure.name, func(t *testing.T) {
+				timeout := time.Second
+				if failure.expire {
+					timeout = 20 * time.Millisecond
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+				calls := 0
+				a := &AuthManager{Client: newHTTPClient(nil)}
+				a.Client.client.Transport = quoteRoundTrip(func(*http.Request) (*http.Response, error) {
+					calls++
+					if calls == 1 {
+						if failure.expire {
+							<-ctx.Done()
+							return nil, ctx.Err()
+						}
+						if failure.cancel {
+							cancel()
+						}
+						if failure.err != nil {
+							return nil, failure.err
+						}
+						if failure.body {
+							r := quoteReply(200, "xx")
+							r.Body = &quoteBudgetBody{ReadCloser: r.Body, budget: &QuoteBudget{Bytes: 1}}
+							return r, nil
+						}
+						if failure.status != 200 {
+							return quoteReply(failure.status, `{}`), nil
+						}
+					}
+					return quoteReply(200, poll.body), nil
+				})
+				err := poll.run(a, ctx, time.Now().Add(time.Second))
+				if !errors.Is(err, failure.want) {
+					t.Fatalf("error = %v, want %v", err, failure.want)
+				}
+				wantCalls := 2
+				if failure.want != nil || failure.name == "success" {
+					wantCalls = 1
+				}
+				if calls != wantCalls {
+					t.Fatalf("requests = %d, want %d", calls, wantCalls)
+				}
+			})
+		}
 	}
 }
 
