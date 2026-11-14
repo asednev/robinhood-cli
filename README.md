@@ -48,6 +48,8 @@ positions, err := client.Positions(context.Background())
 
 For the experimental Portfolio Pilot reader, see [Portfolio reader](PORTFOLIO_READER.md) for its API and qualification requirements.
 
+For budgeted market-data reads through the Go library, see [Quote reader](QUOTE_READER.md).
+
 ## Authentication
 
 ```bash
