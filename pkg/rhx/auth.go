@@ -217,6 +217,10 @@ func (a *AuthManager) refreshSession(ctx context.Context, session Session, waitF
 }
 
 func (a *AuthManager) login(ctx context.Context, username string, password string, waitForChallenge bool) (Session, error) {
+	return a.loginWithMFA(ctx, username, password, envOrNone("RH_MFA_CODE"), waitForChallenge)
+}
+
+func (a *AuthManager) loginWithMFA(ctx context.Context, username string, password string, mfa string, waitForChallenge bool) (Session, error) {
 	deviceToken := randomDeviceToken()
 	if old, err := loadSession(a.SessionPath); err == nil && old.DeviceToken != "" {
 		deviceToken = old.DeviceToken
@@ -232,7 +236,7 @@ func (a *AuthManager) login(ctx context.Context, username string, password strin
 	form.Set("try_passkeys", "false")
 	form.Set("token_request_path", "/login")
 	form.Set("create_read_only_secondary_token", "true")
-	if mfa := envOrNone("RH_MFA_CODE"); mfa != "" {
+	if mfa != "" {
 		form.Set("mfa_code", mfa)
 	}
 	data, status, err := a.Client.postFormRaw(ctx, robinhoodAPIBase+"/oauth2/token/", form)
@@ -318,9 +322,12 @@ func (a *AuthManager) waitForSheriffChallenge(ctx context.Context, inquiryURL st
 		if err := sleepContext(ctx, authPollInterval); err != nil {
 			return err
 		}
-		data, _, err := a.Client.getRaw(ctx, inquiryURL, nil)
+		data, status, err := a.Client.getRaw(ctx, inquiryURL, nil)
 		if err != nil {
-			continue
+			return err
+		}
+		if status >= 400 {
+			return newError(ErrorMFARequired, "Brokerage challenge unavailable")
 		}
 		challenge := sheriffChallenge(data)
 		if len(challenge) == 0 {
@@ -376,12 +383,15 @@ func (a *AuthManager) waitForPromptChallenge(ctx context.Context, challengeID st
 		if err := sleepContext(ctx, authPollInterval); err != nil {
 			return err
 		}
-		data, _, err := a.Client.getRaw(ctx, promptURL, nil)
+		data, status, err := a.Client.getRaw(ctx, promptURL, nil)
 		if err != nil {
-			continue
+			return err
 		}
-		status, _ := asMap(data)["challenge_status"].(string)
-		if status == "validated" {
+		if status >= 400 {
+			return newError(ErrorMFARequired, "Brokerage challenge unavailable")
+		}
+		challengeStatus, _ := asMap(data)["challenge_status"].(string)
+		if challengeStatus == "validated" {
 			return nil
 		}
 	}
@@ -396,11 +406,15 @@ func (a *AuthManager) waitForWorkflowApproval(ctx context.Context, inquiryURL st
 				"status": "continue",
 			},
 		})
-		if err == nil && status < 500 {
-			if workflowApproved(data) {
-				fmt.Fprintln(os.Stderr, "Robinhood verification approved.")
-				return nil
-			}
+		if err != nil {
+			return err
+		}
+		if status >= 400 {
+			return newError(ErrorMFARequired, "Brokerage challenge unavailable")
+		}
+		if workflowApproved(data) {
+			fmt.Fprintln(os.Stderr, "Robinhood verification approved.")
+			return nil
 		}
 		if err := sleepContext(ctx, authPollInterval); err != nil {
 			return err
