@@ -120,7 +120,7 @@ func TestQuoteConcurrentRefreshUsesSharedLock(t *testing.T) {
 		wg.Add(1)
 		go func(q *QuoteConnection) {
 			defer wg.Done()
-			if _, err := q.CurrencyPairs(context.Background()); err != nil {
+			if _, err := q.CurrencyPairsForSymbol(context.Background(), "BTC-USD"); err != nil {
 				t.Error(err)
 			}
 		}(conn)
@@ -218,5 +218,106 @@ func TestQuoteRefreshWriteFailurePreservesSessionAndStops(t *testing.T) {
 	s, err := loadSession(sessionPath(dir+"-original", "default"))
 	if err != nil || s.AccessToken != "old" || s.RefreshToken != "refresh" {
 		t.Fatalf("old session not preserved: %+v %v", s, err)
+	}
+}
+
+func TestCurrencyPairsForSymbolPreservesResponse(t *testing.T) {
+	const body = " {\n\"next\":\"https://example.invalid/?secret=x\",\"results\":[{\"symbol\":\"OTHER\"},null,{\"symbol\":\"OTHER\"}]} "
+	calls := 0
+	c := testQuoteConnection(t, quoteRoundTrip(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.Method != http.MethodGet || r.URL.String() != "https://nummus.robinhood.com/currency_pairs/?symbol=BTC-USD" || r.Header.Get("Authorization") != "Bearer old" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Redacted())
+		}
+		return quoteReply(200, body), nil
+	}), 1, 1000)
+	r, err := c.CurrencyPairsForSymbol(context.Background(), "BTC-USD")
+	if err != nil || string(r.Body) != body || r.Endpoint != "https://nummus.robinhood.com/currency_pairs/" || r.RetrievedAt.IsZero() || calls != 1 {
+		t.Fatalf("response=%+v calls=%d err=%v", r, calls, err)
+	}
+	rows, err := r.Rows()
+	if err != nil || len(rows) != 3 || string(rows[0]) != string(rows[2]) || string(rows[1]) != "null" {
+		t.Fatalf("rows=%s err=%v", rows, err)
+	}
+}
+
+func TestCurrencyPairsForSymbolValidationAndEmpty(t *testing.T) {
+	calls := 0
+	c := testQuoteConnection(t, quoteRoundTrip(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.URL.RawQuery != "symbol=A.B-1" {
+			t.Fatalf("query=%q", r.URL.RawQuery)
+		}
+		return quoteReply(200, `{"results":[],"next":null}`), nil
+	}), 1, 1000)
+	for _, symbol := range []string{"", " BTC-USD", "BTC-USD\n", "BTC&symbol=ETH", "BTC/USD", "BTC%2DUSD", strings.Repeat("A", 33)} {
+		if _, err := c.CurrencyPairsForSymbol(context.Background(), symbol); err == nil {
+			t.Errorf("accepted %q", symbol)
+		}
+	}
+	r, err := c.CurrencyPairsForSymbol(context.Background(), "A.B-1")
+	rows, rowErr := r.Rows()
+	if err != nil || rowErr != nil || len(rows) != 0 || calls != 1 {
+		t.Fatalf("calls=%d rows=%s err=%v rowErr=%v", calls, rows, err, rowErr)
+	}
+}
+
+func TestCurrencyPairsForSymbolRefreshAndLimits(t *testing.T) {
+	calls := 0
+	c := testQuoteConnection(t, quoteRoundTrip(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.URL.Path == "/oauth2/token/" {
+			return quoteReply(200, `{"access_token":"new","refresh_token":"next"}`), nil
+		}
+		if r.URL.RawQuery != "symbol=BTC-USD" {
+			t.Fatalf("query=%q", r.URL.RawQuery)
+		}
+		return quoteReply(401, `{"private":"rejected"}`), nil
+	}), 5, 1000)
+	r, err := c.CurrencyPairsForSymbol(context.Background(), "BTC-USD")
+	if err != nil || r.Status != 401 || calls != 3 {
+		t.Fatalf("status=%d calls=%d err=%v", r.Status, calls, err)
+	}
+	if _, err = c.CurrencyPairsForSymbol(context.Background(), "BTC-USD"); err == nil || calls != 4 {
+		t.Fatalf("second refresh: calls=%d err=%v", calls, err)
+	}
+
+	c = testQuoteConnection(t, quoteRoundTrip(func(*http.Request) (*http.Response, error) { return quoteReply(200, "12345"), nil }), 1, 4)
+	r, err = c.CurrencyPairsForSymbol(context.Background(), "BTC-USD")
+	if err == nil || r.Body != nil {
+		t.Fatalf("partial body=%q err=%v", r.Body, err)
+	}
+	if _, err = c.CurrencyPairsForSymbol(context.Background(), "BTC-USD"); err == nil {
+		t.Fatal("request budget ignored")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err = c.CurrencyPairsForSymbol(ctx, "BTC-USD"); err == nil {
+		t.Fatal("cancellation ignored")
+	}
+}
+
+func TestCurrencyPairsForSymbolMetadataAndRedirect(t *testing.T) {
+	c := testQuoteConnection(t, quoteRoundTrip(func(*http.Request) (*http.Response, error) {
+		r := quoteReply(429, `{"results":[],"next":"opaque"}`)
+		r.Header.Set("Retry-After", "30")
+		return r, nil
+	}), 1, 1000)
+	r, err := c.CurrencyPairsForSymbol(context.Background(), "BTC-USD")
+	if err != nil || r.Status != 429 || r.RetryAfter != "30" || string(r.Body) != `{"results":[],"next":"opaque"}` || strings.Contains(r.Endpoint, "BTC") {
+		t.Fatalf("response=%+v err=%v", r, err)
+	}
+
+	calls := 0
+	c = testQuoteConnection(t, quoteRoundTrip(func(*http.Request) (*http.Response, error) {
+		calls++
+		r := quoteReply(http.StatusFound, "")
+		r.Header.Set("Location", "https://example.invalid/steal")
+		return r, nil
+	}), 2, 1000)
+	r, err = c.CurrencyPairsForSymbol(context.Background(), "BTC-USD")
+	if err != nil || r.Status != http.StatusFound || calls != 1 {
+		t.Fatalf("redirect: status=%d calls=%d err=%v", r.Status, calls, err)
 	}
 }

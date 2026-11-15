@@ -178,6 +178,15 @@ func (c *QuoteConnection) CurrencyPairs(ctx context.Context) (QuoteResponse, err
 	return c.read(ctx, robinhoodCryptoBase, "/currency_pairs/", nil)
 }
 
+// CurrencyPairsForSymbol returns the unmodified metadata response for one symbol.
+// Callers must classify the rows and handle pagination and missing results.
+func (c *QuoteConnection) CurrencyPairsForSymbol(ctx context.Context, symbol string) (QuoteResponse, error) {
+	if !quoteSymbol.MatchString(symbol) {
+		return QuoteResponse{}, newError(ErrorValidation, "Invalid symbol")
+	}
+	return c.read(ctx, robinhoodCryptoBase, "/currency_pairs/", url.Values{"symbol": {symbol}})
+}
+
 // ForexQuote retrieves one exact provider pair ID.
 func (c *QuoteConnection) ForexQuote(ctx context.Context, id string) (QuoteResponse, error) {
 	if !quoteID.MatchString(id) {
