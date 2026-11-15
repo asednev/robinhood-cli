@@ -9,6 +9,11 @@ The budget includes explicit login, refresh, replay, and response bodies.
 Do not change its fields while it is in use.
 
 Call `EquityQuotes`, `CurrencyPairs`, and `ForexQuote` for the raw responses.
+`CurrencyPairsForSymbol` requests metadata for one symbol using a single
+encoded query parameter; it does not fall back to the unfiltered endpoint.
+Callers must check exact symbol, base and quote identities. An empty response
+does not establish absence, and a response with a next page is incomplete.
+The raw body retains pagination information; this API does not follow next URLs.
 `QuoteResponse` retains the complete body, status, safe endpoint, retrieval time,
 and safe Retry-After. `Rows` extracts exact JSON rows from a results envelope,
 including duplicates and nulls; consumers must check status, identity, missing
