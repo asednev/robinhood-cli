@@ -3,6 +3,7 @@ package rhx
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -217,6 +218,10 @@ func (a *AuthManager) refreshSession(ctx context.Context, session Session, waitF
 }
 
 func (a *AuthManager) login(ctx context.Context, username string, password string, waitForChallenge bool) (Session, error) {
+	return a.loginWithMFA(ctx, username, password, envOrNone("RH_MFA_CODE"), waitForChallenge)
+}
+
+func (a *AuthManager) loginWithMFA(ctx context.Context, username string, password string, mfa string, waitForChallenge bool) (Session, error) {
 	deviceToken := randomDeviceToken()
 	if old, err := loadSession(a.SessionPath); err == nil && old.DeviceToken != "" {
 		deviceToken = old.DeviceToken
@@ -232,7 +237,7 @@ func (a *AuthManager) login(ctx context.Context, username string, password strin
 	form.Set("try_passkeys", "false")
 	form.Set("token_request_path", "/login")
 	form.Set("create_read_only_secondary_token", "true")
-	if mfa := envOrNone("RH_MFA_CODE"); mfa != "" {
+	if mfa != "" {
 		form.Set("mfa_code", mfa)
 	}
 	data, status, err := a.Client.postFormRaw(ctx, robinhoodAPIBase+"/oauth2/token/", form)
@@ -319,6 +324,9 @@ func (a *AuthManager) waitForSheriffChallenge(ctx context.Context, inquiryURL st
 			return err
 		}
 		data, _, err := a.Client.getRaw(ctx, inquiryURL, nil)
+		if terminalErr := authPollingError(ctx, err); terminalErr != nil {
+			return terminalErr
+		}
 		if err != nil {
 			continue
 		}
@@ -349,7 +357,7 @@ func (a *AuthManager) waitForSheriffChallenge(ctx context.Context, inquiryURL st
 			if !canPromptForVerificationCode() {
 				return newError(ErrorMFARequired, "Robinhood verification code required. Run `rhx auth login` in an interactive terminal.")
 			}
-			code, err := promptVerificationCode(challengeType)
+			code, err := promptVerificationCode(ctx, challengeType)
 			if err != nil {
 				return err
 			}
@@ -377,11 +385,14 @@ func (a *AuthManager) waitForPromptChallenge(ctx context.Context, challengeID st
 			return err
 		}
 		data, _, err := a.Client.getRaw(ctx, promptURL, nil)
+		if terminalErr := authPollingError(ctx, err); terminalErr != nil {
+			return terminalErr
+		}
 		if err != nil {
 			continue
 		}
-		status, _ := asMap(data)["challenge_status"].(string)
-		if status == "validated" {
+		challengeStatus, _ := asMap(data)["challenge_status"].(string)
+		if challengeStatus == "validated" {
 			return nil
 		}
 	}
@@ -396,17 +407,28 @@ func (a *AuthManager) waitForWorkflowApproval(ctx context.Context, inquiryURL st
 				"status": "continue",
 			},
 		})
-		if err == nil && status < 500 {
-			if workflowApproved(data) {
-				fmt.Fprintln(os.Stderr, "Robinhood verification approved.")
-				return nil
-			}
+		if terminalErr := authPollingError(ctx, err); terminalErr != nil {
+			return terminalErr
+		}
+		if err == nil && status < 500 && workflowApproved(data) {
+			fmt.Fprintln(os.Stderr, "Robinhood verification approved.")
+			return nil
 		}
 		if err := sleepContext(ctx, authPollInterval); err != nil {
 			return err
 		}
 	}
 	return newError(ErrorMFARequired, "Robinhood verification workflow timed out")
+}
+
+func authPollingError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, ErrQuoteBudget) {
+		return err
+	}
+	return nil
 }
 
 func canWaitForAuthChallenge() bool {
@@ -460,10 +482,12 @@ func challengeDetail(payload map[string]any) string {
 	return "Brokerage authentication failed"
 }
 
-func promptVerificationCode(challengeType string) (string, error) {
-	reader := bufio.NewReader(os.Stdin)
+func promptVerificationCode(ctx context.Context, challengeType string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	fmt.Fprintf(os.Stderr, "Enter the %s verification code sent by Robinhood: ", challengeType)
-	line, err := reader.ReadString('\n')
+	line, err := readVerificationLine(ctx, os.Stdin)
 	if err != nil {
 		return "", err
 	}
