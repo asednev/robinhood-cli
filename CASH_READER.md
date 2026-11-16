@@ -8,23 +8,26 @@ reader's UTC fetch time as `ObservedAt`. No special measure label or
 qualification warning is added. The timestamp is not a broker cash update time.
 
 Each call makes a new read; it does not store cash or fetch positions, lots,
-orders or trades. The connection uses the existing profile lock and session
-behavior, including ordinary session renewal when required. No keyring is used.
+orders or trades. Authentication and locking follow the shared
+[portfolio connection contract](PORTFOLIO_READER.md#api), including persistence
+of renewed sessions when required.
 
-The reader checks the complete account listing against the same individual,
-active, self-directed RHF eligibility predicate as the portfolio reader. Cash
-and margin accounts are supported; futures accounts and advisory variants are
-excluded. It then requests the fixed Bonfire
-`/accounts/{accountNumber}/unified/` route, requires the returned account number
-to match, and validates the exact signed decimal syntax and explicit USD
-currency of `uninvested_cash`.
+The reader checks the complete account listing against the shared
+[account eligibility rules](PORTFOLIO_READER.md#api). It then requests Bonfire's
+fixed `/accounts/{accountNumber}/unified/` route, requires the returned account
+number to match, and validates the exact signed decimal syntax and explicit USD
+currency of `uninvested_cash`. The amount permits an optional minus sign,
+at most 20 integer digits and 18 fractional digits, and an absolute value below
+10^20. Its original decimal string is preserved; exponent and plus-sign forms
+are rejected.
 
 Missing or malformed cash, ambiguous JSON, missing identity and non-USD currency
-return `ErrorCashUnavailable`. Identity mismatch, authentication and rate-limit
-errors retain their distinct codes. No partial amount or observation time is
-returned on error. Buying power, equity and withdrawable cash are not
-substitutes. Settlement, collateral and sweep fields are not additional gates
-or inputs to a derived amount.
+return `ErrorCashUnavailable`. At the cash endpoint, identity mismatch,
+authentication and rate-limit errors retain their distinct codes. Account-list
+validation retains the portfolio reader's errors. No partial amount or
+observation time is returned on error. Buying power, equity and withdrawable
+cash are not substitutes. Settlement, collateral and sweep fields are not
+additional gates or inputs to a derived amount.
 
 ## Evidence and superseded qualification failures
 
@@ -32,7 +35,7 @@ or inputs to a derived amount.
   The original implementation note records a 2026-11-16 response from one
   eligible account with matching identity and a USD `uninvested_cash` amount.
   These establish response availability and shape. They are not accounting
-  proofs or new observations made by this test phase.
+  proofs or additional live validation of the current implementation.
 - The handoff separately reports two failed test-only local probes. These
   remain local probe failures, separate from the successful normal-build
   source observations. Per-observation receipts and failure diagnostics are
@@ -57,7 +60,7 @@ or inputs to a derived amount.
 Focused loopback tests exercise the public `Cash` path for exact positive,
 zero, negative and high-precision amounts, fresh repeated calls, account and
 currency binding, malformed responses and service failures. They check that
-only the expected GET routes are used and that cash reads leave session bytes
-unchanged and create no cash files. These are controlled product fixtures,
-not additional broker observations. No live broker probe, Keychain access,
-new login or forced refresh is needed to verify the accepted mapping.
+only the expected GET routes are used and that, with a valid session, cash reads
+leave session bytes unchanged and create no cash files. These are controlled
+product fixtures, not additional broker observations. No live broker probe,
+Keychain access, new login or forced refresh is needed to verify the accepted mapping.

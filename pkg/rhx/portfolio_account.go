@@ -1,7 +1,6 @@
 package rhx
 
 // eligiblePortfolioAccount selects exactly the requested supported account.
-// Account eligibility alone does not establish the meaning of any cash field.
 func eligiblePortfolioAccount(accounts []map[string]any, account string) (map[string]any, error) {
 	var selected map[string]any
 	for _, row := range accounts {
