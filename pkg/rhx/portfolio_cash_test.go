@@ -1,6 +1,7 @@
 package rhx
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,8 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCashAccountBound(t *testing.T) {
@@ -37,22 +41,29 @@ func TestCashAccountBound(t *testing.T) {
 			status                           int
 			malformed                        bool
 		}{
-			{"unqualified positive USD", "123.4500", "USD", "001", 200, false},
-			{"unqualified zero USD", "0", "USD", "001", 200, false},
-			{"unqualified negative USD", "-42.13", "USD", "001", 200, false},
+			{"positive USD", "123.4500", "USD", "001", 200, false},
+			{"zero USD", "0", "USD", "001", 200, false},
+			{"negative USD", "-42.13", "USD", "001", 200, false},
+			{"precise USD", "9007199254740993.123456789012345678", "USD", "001", 200, false},
 			{"wrong identity", "1", "USD", "002", 200, false},
 			{"missing identity", "1", "USD", "", 200, false},
 			{"wrong currency", "1", "EUR", "001", 200, false},
 			{"missing currency", "1", "", "001", 200, false},
 			{"missing amount", "", "USD", "001", 200, false},
 			{"invalid amount", "1e2", "USD", "001", 200, false},
+			{"double sign", "--1", "USD", "001", 200, false},
+			{"plus sign", "+1", "USD", "001", 200, false},
+			{"excess precision", "1.1234567890123456789", "USD", "001", 200, false},
 			{"malformed", "", "", "", 200, true},
 			{"unauthorized", "", "", "", 401, false},
+			{"forbidden", "", "", "", 403, false},
 			{"rate limited", "", "", "", 429, false},
 			{"server error", "", "", "", 500, false},
 		} {
 			t.Run(state.name+"/"+tc.name, func(t *testing.T) {
 				requests := 0
+				cashReads := 0
+				const nextAmount = "-9007199254740993.123456789012345678"
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					requests++
 					if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer fixture" {
@@ -64,6 +75,7 @@ func TestCashAccountBound(t *testing.T) {
 					case "/accounts/":
 						json.NewEncoder(w).Encode(map[string]any{"results": []any{account("002"), account("001")}, "next": nil})
 					case "/accounts/001/unified/":
+						cashReads++
 						if tc.status != 200 {
 							w.WriteHeader(tc.status)
 							return
@@ -72,7 +84,11 @@ func TestCashAccountBound(t *testing.T) {
 							w.Write([]byte("{"))
 							return
 						}
-						json.NewEncoder(w).Encode(map[string]any{"account_number": tc.identity, "uninvested_cash": map[string]any{"amount": tc.amount, "currency_code": tc.currency}})
+						amount := tc.amount
+						if cashReads > 1 {
+							amount = nextAmount
+						}
+						json.NewEncoder(w).Encode(map[string]any{"account_number": tc.identity, "uninvested_cash": map[string]any{"amount": amount, "currency_code": tc.currency}, "account_buying_power": "999", "equity": "888", "cash_available_for_withdrawal": "777"})
 					default:
 						t.Errorf("unexpected path %s", r.URL.Path)
 						w.WriteHeader(500)
@@ -83,6 +99,26 @@ func TestCashAccountBound(t *testing.T) {
 				if err := saveSession(sessionPath(dir, "default"), Session{AccessToken: "fixture"}); err != nil {
 					t.Fatal(err)
 				}
+				sessionBefore, err := os.ReadFile(sessionPath(dir, "default"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					after, err := os.ReadFile(sessionPath(dir, "default"))
+					if err != nil || !bytes.Equal(sessionBefore, after) {
+						t.Error("cash read modified session")
+					}
+					entries, err := os.ReadDir(dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, entry := range entries {
+						name := filepath.Base(sessionPath(dir, "default"))
+						if entry.Name() != name && entry.Name() != name+".lock" {
+							t.Errorf("cash read created unexpected file %s", entry.Name())
+						}
+					}
+				})
 				c, err := NewPortfolioConnection("default", dir)
 				if err != nil {
 					t.Fatal(err)
@@ -101,9 +137,22 @@ func TestCashAccountBound(t *testing.T) {
 					clone.Host = target.Host
 					return http.DefaultTransport.RoundTrip(clone)
 				})
+				started := time.Now()
 				got, err := c.Cash(context.Background(), "001")
 				if requests != 3 {
 					t.Fatalf("unexpected request count: %d", requests)
+				}
+				switch tc.name {
+				case "positive USD", "zero USD", "negative USD", "precise USD":
+					if err != nil || got.Balance != tc.amount || got.Currency != "USD" || got.ObservedAt.Before(started) || got.ObservedAt.After(time.Now()) || got.ObservedAt.Location() != time.UTC {
+						t.Fatalf("expected exact fresh USD cash observation: %v", err)
+					}
+					started = time.Now()
+					again, err := c.Cash(context.Background(), "001")
+					if err != nil || again.Balance != nextAmount || again.Currency != "USD" || again.ObservedAt.Before(started) || again.ObservedAt.After(time.Now()) || !again.ObservedAt.After(got.ObservedAt) || again.ObservedAt.Location() != time.UTC || requests != 6 || cashReads != 2 {
+						t.Fatalf("second call did not fetch a fresh cash observation: %v", err)
+					}
+					return
 				}
 				if err == nil || got != (CashObservation{}) {
 					t.Fatal("expected unavailable observation")
@@ -112,7 +161,7 @@ func TestCashAccountBound(t *testing.T) {
 				switch tc.name {
 				case "wrong identity":
 					wantCode = ErrorBrokerAccountMismatch
-				case "unauthorized":
+				case "unauthorized", "forbidden":
 					wantCode = ErrorAuthRequired
 				case "rate limited":
 					wantCode = ErrorRateLimited
