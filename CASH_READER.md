@@ -131,3 +131,20 @@ assertion to repair in that case: the outstanding failure is the absent
 qualified product success path, which cannot be enabled from this evidence.
 No source or test behavior was changed. No full suite, linter, formatter or
 static analysis ran. Downloaded research files were removed after inspection.
+
+The next focused test-phase reproduction on 2026-11-16 again passed that
+regression; the reported no-go remains a missing qualified success capability,
+not a failing rejection assertion or an environment failure. Re-reading the
+pinned `App-72eed85ebeccf660.js` produced the same SHA-256 above and no new
+calculation for the selected field. The provider's
+[High-Yield Cash Program Agreement](https://cdn.robinhood.com/assets/robinhood/legal/IntraFi%20Network%20Deposit%20Sweep%20Program%20Agreement.pdf),
+revision `20261102-6079817-19358094`, sections B and D (pages 1-2 and 14),
+distinguishes brokerage-held and swept free credit balances from options cash
+collateral and short stock collateral. Section D explicitly excludes both
+collateral categories from uninvested cash. This is additional negative
+evidence against equating the product term with all cash; it does not define
+Bonfire `uninvested_cash`, prove a total-cash formula, or identify a response
+state where omitted components are absent. No success state can be enabled
+from these sources within the approved contract. Provider field semantics and
+an observable supported-state discriminator remain necessary; T1/test-2 are
+unresolved, and no code or test expectation was weakened.
