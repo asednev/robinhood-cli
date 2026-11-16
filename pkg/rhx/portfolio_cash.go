@@ -22,7 +22,7 @@ const ErrorCashUnavailable ErrorCode = "CASH_UNAVAILABLE"
 
 func cashUnavailable() error { return newError(ErrorCashUnavailable, "Brokerage cash unavailable") }
 
-// Cash reads USD uninvested cash for one explicitly selected eligible account.
+// Cash attempts a qualified total USD cash read for one explicitly selected account.
 // It does not read positions or persist cash. See CASH_READER.md for source limits.
 func (c *PortfolioConnection) Cash(ctx context.Context, account string) (CashObservation, error) {
 	if !portfolioID.MatchString(account) {
@@ -109,7 +109,7 @@ func (c *PortfolioConnection) cashLocked(ctx context.Context, account string) (C
 	if !ok || currency != "USD" {
 		return CashObservation{}, cashUnavailable()
 	}
-	return CashObservation{Balance: amount, Currency: currency, ObservedAt: time.Now().UTC()}, nil
+	return CashObservation{}, cashUnavailable()
 }
 
 // Reject duplicate object keys, including nested money fields, instead of
