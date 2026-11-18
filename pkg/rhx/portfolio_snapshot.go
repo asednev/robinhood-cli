@@ -132,36 +132,8 @@ func (c *PortfolioConnection) snapshotLocked(ctx context.Context, account string
 	if err != nil {
 		return PortfolioSnapshot{}, err
 	}
-	found := false
-	for _, row := range accounts {
-		n, ok := requiredString(row, "account_number")
-		if !ok {
-			return PortfolioSnapshot{}, incomplete()
-		}
-		if n != account {
-			continue
-		}
-		if found {
-			return PortfolioSnapshot{}, incomplete()
-		}
-		found = true
-		typ, tok := requiredString(row, "brokerage_account_type")
-		state, sok := requiredString(row, "state")
-		ref, rok := requiredString(row, "url")
-		management, mok := requiredString(row, "management_type")
-		affiliate, aok := requiredString(row, "affiliate")
-		accountType, cok := requiredString(row, "type")
-		deactivated, dok := row["deactivated"].(bool)
-		futures, fok := row["has_futures_account"].(bool)
-		advisory, vok := row["advisory_account_variant"]
-		if !tok || typ != "individual" || !sok || state != "active" || !rok || ref != robinhoodAPIBase+"/accounts/"+account+"/" ||
-			!mok || management != "self_directed" || !aok || affiliate != "rhf" || !cok || (accountType != "cash" && accountType != "margin") ||
-			!dok || deactivated || !fok || futures || !vok || advisory != nil {
-			return PortfolioSnapshot{}, incomplete()
-		}
-	}
-	if !found {
-		return PortfolioSnapshot{}, newError(ErrorBrokerAccountMismatch, "Broker account is not accessible")
+	if _, err := eligiblePortfolioAccount(accounts, account); err != nil {
+		return PortfolioSnapshot{}, err
 	}
 	first, err := c.inventory(ctx, account)
 	if err != nil {
